@@ -15,4 +15,5 @@ dependencies = [
     "google-generativeai>=0.8.5",
     "python-dotenv>=1.0.0",
     "tenacity>=8.2.2",
+    "gunicorn>=20.1.0",
 ]
