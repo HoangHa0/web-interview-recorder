@@ -20,7 +20,11 @@ const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
 // Define the API Base URL (must match the FastAPI server)
-const API_BASE_URL = 'http://127.0.0.1:8000/api'; 
+// Use Vite environment variable `VITE_API_BASE_URL` in production (e.g. Vercel),
+// otherwise fall back to local development server.
+const API_BASE_URL = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_BASE_URL)
+    ? import.meta.env.VITE_API_BASE_URL
+    : 'http://127.0.0.1:8000/api';
 
 // Hardcoded Admin Key for Interviewer login simulation (Replace with database lookup later)
 const ADMIN_AUTH_KEY = "VUNGOIMORA12345"; 
