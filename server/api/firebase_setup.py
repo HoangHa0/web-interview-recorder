@@ -5,7 +5,6 @@ import traceback
 
 # --- Configuration Constants ---
 # Path to the service account key file (DANGER: DO NOT COMMIT THIS FILE!)
-# You must download this JSON file from your Google Firebase Project settings.
 DEFAULT_SERVICE_ACCOUNT_KEY_PATH = os.path.join(os.path.dirname(__file__), 'firebase-admin-key.json')
 # Allow overriding the path via environment variable for flexibility in different environments
 SERVICE_ACCOUNT_KEY_PATH = os.environ.get('FIREBASE_ADMIN_KEY_PATH', DEFAULT_SERVICE_ACCOUNT_KEY_PATH)
