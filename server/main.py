@@ -5,6 +5,15 @@ from fastapi.staticfiles import StaticFiles
 import os
 import sys
 
+# When running `python main.py` from the `server/` directory, Python's import
+# machinery doesn't include the repository root on `sys.path`, so package-style
+# imports like `server.api...` fail locally. Ensure the parent directory (project
+# root) is on `sys.path` so the same imports work both locally and on the host.
+if __package__ is None:
+    repo_root = os.path.dirname(os.path.dirname(__file__))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
 # Use package imports instead of manipulating sys.path
 
 sys.stdout.reconfigure(encoding='utf-8') 
