@@ -9,9 +9,9 @@ import json # For handling metadata files
 import time # For simulating processing time (keep for sync fallbacks)
 import asyncio # Use asyncio.sleep in async helpers
 
-from api.firebase_setup import get_firestore_client
+from server.api.firebase_setup import get_firestore_client
 # 🎯 BƯỚC 1: Mở rộng Import Models
-from api.models import (
+from server.api.models import (
     TokenVerificationRequest,
     InterviewerCreateSessionRequest
 )
