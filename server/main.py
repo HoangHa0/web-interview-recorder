@@ -5,14 +5,13 @@ from fastapi.staticfiles import StaticFiles
 import os
 import sys
 
-# Add the 'api' directory to the system path to allow clean imports
-sys.path.append(os.path.join(os.path.dirname(__file__), 'api'))
+# Use package imports instead of manipulating sys.path
 
 sys.stdout.reconfigure(encoding='utf-8') 
 sys.stderr.reconfigure(encoding='utf-8')
 
-from api.router import api_router # Import the API router we just created
-from api.firebase_setup import initialize_firebase # <-- Import the Firebase initialization function
+from server.api.router import api_router # Import the API router we just created
+from server.api.firebase_setup import initialize_firebase # <-- Import the Firebase initialization function
 
 # --- FASTAPI APPLICATION INITIALIZATION ---
 
