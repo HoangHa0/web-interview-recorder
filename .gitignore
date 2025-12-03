@@ -1,0 +1,26 @@
+# Dependency Directories
+node_modules
+venv
+.env
+
+# Build Artifacts
+client/dist
+client/build
+server/pycache
+server/*.pyc
+
+# Local Filesystem Storage (Do NOT commit video uploads!)
+server/uploads
+server/logs
+server/api/firebase-admin-key.json
+server/.env
+
+# IDE and OS files
+.DS_Store
+*.swp
+.vscode
+
+
+# Backup of nested git data (do not commit)
+.server_git_backup/
+
