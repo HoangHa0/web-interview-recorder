@@ -20,7 +20,6 @@ server/.env
 *.swp
 .vscode
 
-
 # Backup of nested git data (do not commit)
 .server_git_backup/
 

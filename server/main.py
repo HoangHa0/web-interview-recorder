@@ -27,6 +27,7 @@ app = FastAPI(
 # In development, the client typically runs on localhost:3000/5173 and the server on localhost:8000.
 origins = [
     # Allow requests from the frontend during local development
+    "https://web-interview-recorder.vercel.app/", 
     "http://localhost",
     "http://localhost:3000",
     "http://localhost:5173", # Common React/Vite development port
