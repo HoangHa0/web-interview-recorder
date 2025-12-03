@@ -18,7 +18,7 @@ from server.api.models import (
 
 import uuid # For generating unique IDs
 
-from ai_service import safe_process_interview_answer
+from server.ai_service import safe_process_interview_answer
 # --- CONFIGURATION ---
 # Mandatory timezone setup for folder naming (Asia/Bangkok)
 ASIA_BANGKOK = pytz.timezone('Asia/Bangkok')
