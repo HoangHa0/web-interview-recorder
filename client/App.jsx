@@ -26,7 +26,6 @@ const API_BASE_URL = (typeof import.meta !== 'undefined' && import.meta.env && i
     ? import.meta.env.VITE_API_BASE_URL
     : 'http://127.0.0.1:8000/api';
 
-// Admin Key for Interviewer login
 // Admin Key for Interviewer login — read from Vite env `VITE_ADMIN_AUTH_KEY`.
 // Use `VITE_` prefix so Vite exposes the variable to the client. Fallback to
 // empty string to avoid accidentally granting admin access when not set.

@@ -4,6 +4,7 @@
   "description": "_Final Project for Computer Networks_",
   "main": "index.js",
   "scripts": {
+    "dev": "vite --host",
     "start": "vite --host --open",
     "build": "vite build",
     "vercel-build": "npm run build",
