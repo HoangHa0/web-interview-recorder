@@ -73,27 +73,38 @@ def process_interview_answer(video_path, question_index, output_folder, question
         # the question from its own knowledge. This prevents the model from returning
         # an "ideal" sample answer when the audio is short or empty.
         prompt_text = f"""
-        You are an expert transcriber. ONLY transcribe the SPEECH AUDIO contained in the provided video file.
+        You are an expert transcriber and a strict technical interviewer assistant for Data roles.
+        Your task is to transcribe the speech and provide a critical assessment of the candidate's answer.
 
         IMPORTANT RULES (obey exactly):
-        1) Do NOT generate or invent an answer to the question from your own knowledge.
-           If the audio contains responses, transcribe verbatim (remove only excessive filler words).
-           If the audio is a single word (e.g., "smart"), return exactly that word.
-        2) If the audio is silent, extremely short, or unintelligible, return an accurate, brief transcription string
-           (e.g., empty string or the best-effort literal tokens) but DO NOT produce a multi-sentence sample answer.
-        3) Preserve Vietnamese diacritics and proper nouns exactly as spoken.
-        4) Return ONLY a valid JSON object and nothing else (no explanation text).
+        1) Do NOT generate or invent an answer.
+           - If audio contains speech, transcribe verbatim (remove excessive fillers).
+           - If audio is silent/unintelligible, return an empty string or best-effort tokens.
+        2) Preserve Vietnamese diacritics and proper nouns exactly as spoken.
+        3) Return ONLY a valid JSON object. No markdown, no explanations.
 
         The JSON must contain exactly these fields:
             - "transcript": string (verbatim transcription)
-            - "match_score": integer 0-100 (how well the spoken answer addresses the question: {question_text})
-            - "feedback": short objective comment (2-3 sentences) from an interviewer perspective
+            - "match_score": integer 0-100.
+                * CRITERIA:
+                * Score STRICTLY. Do not be generous.
+                * 90-100: Exceptional, deep, structured, shows critical thinking and specific examples.
+                * 75-89: Correct but "shallow", generic, lacks specific examples, or phrasing is slightly unprofessional.
+                * < 75: Irrelevant, incorrect, extremely short (e.g., one word), or fails to address all parts of the question.
+            - "feedback": string (2-3 sentences).
+                * PERSPECTIVE: Write this for the HIRING MANAGER, not the candidate.
+                * DO NOT use phrases like "To improve", "You should", or "The candidate should".
+                * EVALUATE:
+                  1. Depth of thought & Technical mindset (Is the answer too surface-level for a Data professional?).
+                  2. Clarity & Structure (Is the answer logical and professional?).
+                  3. Completeness (Did they address the "Why", "How", and all parts of the prompt?).
+                * CRITIQUE: If the answer is generic (e.g., "because it's sensitive") without explaining the implications/policy, note that it lacks depth.
 
         Format example:
         {{
-            "transcript": "Hello I am...",
-            "match_score": 85,
-            "feedback": "Good answer but..."
+            "transcript": "I wouldn't copy it because...",
+            "match_score": 82,
+            "feedback": "The candidate addresses the privacy concern but the response is shallow and lacks reference to specific data protection policies. The phrasing is informal and does not demonstrate the rigorous caution expected in a data role."
         }}
 
         The candidate is answering the question: "{question_text}".
