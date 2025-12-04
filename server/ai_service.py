@@ -69,17 +69,25 @@ def process_interview_answer(video_path, question_index, output_folder, question
         # SỬ DỤNG MODEL BẠN MUỐN: gemini-2.5-flash
         model = genai.GenerativeModel("gemini-2.5-flash")
         
-        # Prompt yêu cầu trả về JSON string
+        # Prompt: force the model to only transcribe the audio and NOT invent or answer
+        # the question from its own knowledge. This prevents the model from returning
+        # an "ideal" sample answer when the audio is short or empty.
         prompt_text = f"""
-        You are an expert Interview Recruiter.
-        The candidate is answering the question: "{question_text}".
+        You are an expert transcriber. ONLY transcribe the SPEECH AUDIO contained in the provided video file.
 
-        Analyze the video audio and return a valid JSON object (Do not add any other text outside the JSON).
-        The JSON must have exactly these 3 fields:
-        
-        1. "transcript": Transcribe the speech to text accurately. Remove excessive filler words. If the speaker says Vietnamese proper nouns (e.g., names of people or company names), preserve the original Vietnamese diacritics exactly as spoken. For example, “Phùng Khánh Linh” must be transcribed exactly with correct accents.
-        2. "match_score": An integer (0-100). How well does the answer address the question "{question_text}"?
-        3. "feedback": As an expert Interview Recruiter, provide a short, objective, constructive comment (2–3 sentences) evaluating the interviewee’s answer strictly from the interviewer’s perspective without offering any suggestions or guidance for interviewee's improvement.
+        IMPORTANT RULES (obey exactly):
+        1) Do NOT generate or invent an answer to the question from your own knowledge.
+           If the audio contains responses, transcribe verbatim (remove only excessive filler words).
+           If the audio is a single word (e.g., "smart"), return exactly that word.
+        2) If the audio is silent, extremely short, or unintelligible, return an accurate, brief transcription string
+           (e.g., empty string or the best-effort literal tokens) but DO NOT produce a multi-sentence sample answer.
+        3) Preserve Vietnamese diacritics and proper nouns exactly as spoken.
+        4) Return ONLY a valid JSON object and nothing else (no explanation text).
+
+        The JSON must contain exactly these fields:
+            - "transcript": string (verbatim transcription)
+            - "match_score": integer 0-100 (how well the spoken answer addresses the question: {question_text})
+            - "feedback": short objective comment (2-3 sentences) from an interviewer perspective
 
         Format example:
         {{
@@ -87,11 +95,18 @@ def process_interview_answer(video_path, question_index, output_folder, question
             "match_score": 85,
             "feedback": "Good answer but..."
         }}
+
+        The candidate is answering the question: "{question_text}".
         """
         
         # Call API
         response = model.generate_content([video_file, prompt_text])
         raw_text = response.text
+        # Debug: log a (truncated) raw AI response to help diagnose hallucinations
+        try:
+            print(f"[AI RAW RESPONSE] (truncated) {raw_text[:2000]}")
+        except Exception:
+            pass
         
         # --- XỬ LÝ KẾT QUẢ ---
         try:
