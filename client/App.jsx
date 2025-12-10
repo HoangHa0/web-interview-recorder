@@ -145,7 +145,14 @@ const App = () => {
     const [userId, setUserId] = useState(null);
     const [isAuthReady, setIsAuthReady] = useState(false);
     const [view, setView] = useState('login'); // 'login', 'interview', 'complete'
-    
+    // --- THÊM 5 DÒNG NÀY VÀO ĐÂY (Move from inside function to here) ---
+    const [serverEmotion, setServerEmotion] = useState(null);
+    const [serverEmotionScore, setServerEmotionScore] = useState(null);
+    const [serverPaceLabel, setServerPaceLabel] = useState(null);
+    const [serverPaceWpm, setServerPaceWpm] = useState(null);
+    const [serverDuration, setServerDuration] = useState(null);
+    // ------------------------------------------------------------------
+
     // Interviewee Form State
     const [token, setToken] = useState('');
     const [userName, setUserName] = useState('');
@@ -187,7 +194,121 @@ const App = () => {
     const [comment, setComment] = useState('');
     const [isDraftLoaded, setIsDraftLoaded] = useState(false); // Khóa an toàn
 
-    // Manual AI retry removed: AI runs in background server-side and does not provide a manual retry from the interview UI.
+    // app.jsx - Bên trong component App
+
+    // Hàm gọi API Retry - Retry ngay khi bấm nút, không cần popup xác nhận
+    const handleManualRetry = async (folderName, qIndex, qText) => {
+        try {
+            console.log(`[Retry] Starting manual retry for Q${qIndex + 1}`);
+            
+            // --- RESET ALL AI STATES IMMEDIATELY ---
+            setQuestionTranscript("Processing...");
+            setAiMatchScore(0);
+            setAiFeedback("");
+            setServerEmotion(null);
+            setServerEmotionScore(null);
+            setServerPaceLabel(null);
+            setServerPaceWpm(null);
+            setServerDuration(null);
+            
+            // Call API to queue the retry
+            const response = await fetch(`${API_BASE_URL}/retry-processing`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    token: token || 'session_token_placeholder',
+                    folder: folderName,
+                    questionIndex: qIndex,
+                    questionText: qText
+                })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                const jobId = data.job_id;
+                const queuePosition = data.queue_position;
+                
+                console.log(`[Retry] Job queued: ${jobId}, position: ${queuePosition}`);
+                setMessage(`⏳ Retry queued for Q${qIndex + 1}... Position in queue: ${queuePosition}`);
+                
+                // Poll job status
+                pollJobStatus(jobId, qIndex);
+            } else {
+                const errData = await response.json();
+                const errorMessage = errData.detail || errData.message || "Unknown error";
+                console.error(`[Retry] Queue error: ${errorMessage}`);
+                setMessage(`❌ Retry failed: ${errorMessage}`);
+            }
+        } catch (err) {
+            console.error(`[Retry] Network error:`, err);
+            setMessage(`❌ Connection error: ${err.message}`);
+        }
+    };
+
+    const pollJobStatus = async (jobId, qIndex) => {
+        const maxWaitTime = 300; // 5 minutes max
+        const pollInterval = 2000; // Check every 2 seconds
+        let elapsedTime = 0;
+
+        const pollTimer = setInterval(async () => {
+            try {
+                const response = await fetch(`${API_BASE_URL}/job-status/${jobId}`);
+                
+                if (!response.ok) {
+                    clearInterval(pollTimer);
+                    setMessage(`❌ Failed to check job status`);
+                    return;
+                }
+
+                const job = await response.json();
+                console.log(`[Poll] Q${qIndex + 1} status: ${job.status}`);
+
+                if (job.status === "success") {
+                    // Job completed successfully!
+                    clearInterval(pollTimer);
+                    setQuestionTranscript(job.result.transcript);
+                    setAiMatchScore(job.result.match_score);
+                    setMessage(`✅ Q${qIndex + 1} AI analysis complete!`);
+                    
+                    // Refresh review data to show updated results
+                    setTimeout(() => fetchReviewData(currentReviewSession), 1000);
+                    
+                } else if (job.status === "failed") {
+                    // Job failed permanently
+                    clearInterval(pollTimer);
+                    setMessage(`❌ Q${qIndex + 1} analysis failed. Please try again.`);
+                    setQuestionTranscript(job.error_message || "Analysis failed");
+                    
+                } else if (job.status === "retry_scheduled") {
+                    // Waiting for auto-retry delay
+                    const retryTime = new Date(job.retry_scheduled_at);
+                    const secondsUntilRetry = Math.ceil((retryTime - new Date()) / 1000);
+                    setMessage(`⏳ Auto-retry scheduled in ${secondsUntilRetry}s for Q${qIndex + 1}...`);
+                    
+                } else if (job.status === "pending" || job.status === "manual_retry_pending") {
+                    // Still waiting in queue
+                    setMessage(`⏳ Q${qIndex + 1} waiting in queue... Position: ${job.queue_position}`);
+                    
+                } else if (job.status === "processing") {
+                    // Currently being analyzed
+                    setMessage(`🤖 Analyzing Q${qIndex + 1}...`);
+                    setQuestionTranscript("AI is analyzing your answer...");
+                }
+
+                elapsedTime += pollInterval;
+                if (elapsedTime > maxWaitTime) {
+                    clearInterval(pollTimer);
+                    setMessage(`⏱️ Analysis timeout for Q${qIndex + 1}. Please refresh.`);
+                }
+
+            } catch (err) {
+                console.error(`[Poll] Error checking job status:`, err);
+            }
+        }, pollInterval);
+    };
+
+    
+
     // 1. Tự động TẢI (Auto-Load) với cơ chế Khóa
     useEffect(() => {
         if (view === 'admin_review' && currentReviewSession) {
@@ -255,6 +376,7 @@ const App = () => {
     const timerIntervalRef = useRef(null); // Ref to hold the interval ID
 
     const [audioLevel, setAudioLevel] = useState(0); // Volume detector state (0-100)
+    const [liveEmotion, setLiveEmotion] = useState('neutral'); // calm, neutral, confident, excited, stressed
     const audioContextRef = useRef(null);
     const analyserRef = useRef(null);
     const dataArrayRef = useRef(null);
@@ -518,6 +640,16 @@ const App = () => {
         // FIX: Increase sensitivity by multiplying by 1.5 before capping at 100
         const scaledLevel = Math.min(100, Math.round((rms / 255) * 150));
         setAudioLevel(scaledLevel);
+    useEffect(() => {
+    // Simple heuristic mapping from audioLevel -> emotion label
+        const level = audioLevel;
+        let emotion = 'neutral';
+        if (level < 10) emotion = 'calm';
+        else if (level >= 10 && level < 25) emotion = 'confident';
+        else if (level >= 25 && level < 55) emotion = 'excited';
+        else if (level >= 55) emotion = 'stressed';
+        setLiveEmotion(emotion);
+    }, [audioLevel]);
 
         // Loop the animation
         animationFrameRef.current = requestAnimationFrame(analyzeVolume);
@@ -699,6 +831,7 @@ const App = () => {
         // Provide question text as a convenience so server does not need to rely on Firestore lookup
         const questionTextForUpload = questions[currentQuestionIndex]?.text || '';
         formData.append('questionText', questionTextForUpload);
+        formData.append('durationSeconds', String(elapsedTime || 0));
         // Append the video blob with the required filename (Q*.webm)
         formData.append('video', videoBlob, `Q${questionNumber}.webm`);
 
@@ -1103,7 +1236,8 @@ const App = () => {
                 availableQIndexes: questionKeys,
                 transcript: transcriptText,
                 videoBaseUrl,
-                metaUrl   // ⭐ QUAN TRỌNG: thêm dòng này
+                metaUrl,   // ⭐ QUAN TRỌNG: thêm dòng này
+                folderName: folder  // ⭐ Store folder for retry button
             });
 
         } catch (e) {
@@ -1141,7 +1275,7 @@ const App = () => {
             const text = decoder.decode(arrayBuffer);
             const meta = JSON.parse(text);
 
-            // --- BẮT ĐẦU SỬA Ở ĐÂY ---
+            // --- FETCH TRANSCRIPT & AI DATA ---
             const key = String(qIndex);
             const item = meta.receivedQuestions ? meta.receivedQuestions[key] : null;
 
@@ -1150,16 +1284,34 @@ const App = () => {
                 const transcript = item.transcript_text || 'Transcript not found.';
                 const score = item.ai_match_score || 0;
                 const feedback = item.ai_feedback || '';
+                const status = item.status || 'unknown';
                 
+                // 2) Lấy emotion từ server
+                const emotion = item.emotion || null;
+                const emotionScore = item.emotion_score ?? null;
+
+                // 3) Lấy pace từ server
+                const paceLabel = item.pace_label || null;
+                const paceWpm = item.pace_wpm ?? null;
+
+                // 4) Lấy độ dài video
+                const durationSeconds = item.durationSeconds ?? null;
+
                 // Cập nhật tất cả các state
                 setQuestionTranscript(transcript);
-                setAiMatchScore(score); // ⭐ THÊM DÒNG NÀY
-                setAiFeedback(feedback); // ⭐ THÊM DÒNG NÀY
+                setAiMatchScore(score);
+                setAiFeedback(feedback);
+                // NEW: cập nhật state emotion/pace
+                setServerEmotion(emotion);
+                setServerEmotionScore(emotionScore);
+                setServerPaceLabel(paceLabel);
+                setServerPaceWpm(paceWpm);
+                setServerDuration(durationSeconds);
                 setQuestionTranscriptLoading(false);
                 
                 return transcript;
             }
-            // --- KẾT THÚC SỬA Ở ĐÂY ---
+            // --- KẾT THÚC ---
 
         } catch (err) {
             console.error('Error loading transcript:', err);
@@ -1168,7 +1320,7 @@ const App = () => {
         setQuestionTranscript('Transcript not found for this question.');
         setQuestionTranscriptLoading(false);
         return "";
-    }, [reviewData, setAiMatchScore, setAiFeedback]); // ⭐ THÊM setAiMatchScore, setAiFeedback vào dependencies
+    }, [reviewData, setAiMatchScore, setAiFeedback, setServerEmotion, setServerEmotionScore, setServerPaceLabel, setServerPaceWpm, setServerDuration]); // ⭐ THÊM setAiMatchScore, setAiFeedback vào dependencies
     // ... (Các dòng code sau đó)
 
     // Load transcript when reviewData or currentQIndex changes (AI tab)
@@ -1180,13 +1332,18 @@ const App = () => {
 
     // --- BẮT ĐẦU ĐOẠN CODE CẦN CHÈN (POLLING) ---
     // Tự động kiểm tra lại sau mỗi 3 giây nếu trạng thái đang là "Processing..."
+    // hoặc server-side status cho biết AI đang được xử lý (uploaded_processing_ai / retrying_processing_ai).
     useEffect(() => {
         let intervalId;
 
-        // Nếu text hiện tại là "Processing...", nghĩa là AI chưa xong -> Cần check lại
-        if (questionTranscript === "Processing...") {
+        const serverIndicatesProcessing = currentQuestionData && (
+            currentQuestionData.status === 'uploaded_processing_ai' ||
+            currentQuestionData.status === 'retrying_processing_ai'
+        );
+
+        if (questionTranscript === "Processing..." || serverIndicatesProcessing) {
             console.log("⏳ AI đang xử lý, sẽ kiểm tra lại sau 3s...");
-        
+
             intervalId = setInterval(() => {
                 // Gọi lại hàm lấy dữ liệu để xem có text mới chưa
                 fetchTranscriptForQuestion(currentQIndex);
@@ -1197,7 +1354,7 @@ const App = () => {
         return () => {
             if (intervalId) clearInterval(intervalId);
         };
-    }, [questionTranscript, currentQIndex, fetchTranscriptForQuestion]);
+    }, [questionTranscript, currentQIndex, fetchTranscriptForQuestion, currentQuestionData]);
     // --- KẾT THÚC ĐOẠN CODE CẦN CHÈN ---
 
 
@@ -1482,7 +1639,10 @@ const App = () => {
             
                 {/* Nút Back to Dashboard */}
                 <button 
-                    onClick={() => setView('admin_dashboard')}
+                    onClick={() => {
+                        setMessage(''); // <--- THÊM DÒNG NÀY: Xóa thông báo khi thoát ra
+                        setView('admin_dashboard');
+                    }}
                     className="flex items-center text-gray-500 hover:text-indigo-600 mb-4 transition-colors group"
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 transform group-hover:-translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1525,7 +1685,10 @@ const App = () => {
                             return (
                                 <button
                                     key={index}
-                                    onClick={() => setCurrentQIndex(index)}
+                                    onClick={() => {
+                                        setMessage(''); // <--- THÊM DÒNG NÀY: Xóa thông báo khi chuyển câu
+                                        setCurrentQIndex(index);
+                                    }}
                                     className={btnClass}
                                     title={hasData ? "View Recording" : "No Data Found"}
                                 >
@@ -1558,14 +1721,13 @@ const App = () => {
 
                     {/* Column 2: AI Transcript & Analysis */}
                     <div className="lg:col-span-1 space-y-4">
-                        {/* Spacer to align panel top with video frame on large screens */}
                         <div className="hidden lg:block h-6" aria-hidden="true" />
                         
                         <div className="p-4 bg-gray-50 rounded-lg shadow-inner border border-gray-200">
                             <h4 className="text-lg font-bold text-indigo-700 mb-3 flex items-center justify-between">
                                 <span>AI Analysis</span>
-                                {/* Hiển thị Badge điểm số nếu đã có kết quả */}
-                                {questionTranscript && questionTranscript !== "Processing..." && questionTranscript !== "Transcript not found for this question." && (
+                                {/* Badge Điểm số */}
+                                {aiMatchScore > 0 && (
                                     <span className={`text-sm px-2 py-1 rounded-full text-white ${
                                         aiMatchScore >= 70 ? 'bg-green-600' : aiMatchScore >= 40 ? 'bg-yellow-500' : 'bg-red-500'
                                     }`}>
@@ -1576,6 +1738,7 @@ const App = () => {
 
                             <div className="bg-white p-4 rounded border border-gray-100 shadow-sm">
                                 {questionTranscriptLoading ? (
+                                    // LOADING SPINNER
                                     <div className="flex items-center gap-2 text-indigo-500 italic py-4">
                                         <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
                                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
@@ -1585,77 +1748,170 @@ const App = () => {
                                     </div>
                                 ) : (
                                     <>
-                                        {/* TRƯỜNG HỢP 1: ĐANG XỬ LÝ (Processing) */}
-                                        {questionTranscript === "Processing..." ? (
-                                            <div className="flex flex-col gap-2 py-4 text-center">
-                                                <span className="text-orange-600 font-medium animate-pulse text-lg">
-                                                    ⏳ AI is analyzing content...
-                                                </span>
-                                                <span className="text-xs text-gray-500">
-                                                    Transcribing audio, calculating match score, and generating feedback.
-                                                </span>
+                                        {/* TRƯỜNG HỢP 1: LỖI (HIỆN NÚT RETRY) */}
+                                        {(currentQuestionData?.status === 'ai_error' || (questionTranscript && questionTranscript.includes("AI Analysis Failed"))) ? (
+                                            <div className="bg-red-50 border border-red-200 rounded p-4 text-center">
+                                                <h5 className="text-red-700 font-bold mb-2 flex items-center justify-center gap-2">
+                                                    ⚠️ Analysis Failed
+                                                </h5>
+                                                <p className="text-red-600 text-sm mb-4">
+                                                    {questionTranscript || "An error occurred during AI processing."}
+                                                </p>
+                                                
+                                                {/* --- NÚT RETRY --- */}
+                                                <button 
+                                                    onClick={() => handleManualRetry(
+                                                        reviewData?.folderName, // Use computed folder from reviewData
+                                                        currentQIndex,          // Question index (0-based)
+                                                        currentQuestionData?.questionText // Question text
+                                                    )}
+                                                    disabled={questionTranscript === "Waiting in queue..."}
+                                                    className={`px-4 py-2 text-white text-sm font-bold rounded shadow transition flex items-center justify-center gap-2 w-full ${
+                                                        questionTranscript === "Waiting in queue..." 
+                                                            ? 'bg-gray-400 cursor-not-allowed' 
+                                                            : 'bg-red-600 hover:bg-red-700'
+                                                    }`}
+                                                >
+                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                                    </svg>
+                                                    {questionTranscript === "Waiting in queue..." ? "Waiting in Queue..." : "Retry AI Analysis"}
+                                                </button>
                                             </div>
                                         ) : (
-                                            /* TRƯỜNG HỢP 2: ĐÃ CÓ KẾT QUẢ */
-                                            questionTranscript && questionTranscript !== "Transcript not found for this question." ? (
-                                                <div className="space-y-4">
-                                                    {/* 1. Match Score Visualization (Progress Bar) */}
-                                                    <div>
-                                                        <div className="flex justify-between text-xs font-semibold text-gray-500 mb-1">
-                                                            <span>Relevance to Question</span>
-                                                            <span>{aiMatchScore}/100</span>
-                                                        </div>
-                                                        <div className="w-full bg-gray-200 rounded-full h-2.5">
-                                                            <div 
-                                                                className={`h-2.5 rounded-full transition-all duration-1000 ease-out ${
-                                                                    aiMatchScore >= 70 ? 'bg-green-500' : aiMatchScore >= 40 ? 'bg-yellow-400' : 'bg-red-500'
-                                                                }`} 
-                                                                style={{ width: `${aiMatchScore}%` }}
-                                                            ></div>
-                                                        </div>
-                                                    </div>
-
-                                                    <hr className="border-gray-100" />
-
-                                                    {/* 2. Transcript Content */}
-                                                    <div>
-                                                        <h5 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Transcript</h5>
-                                                        <div className="text-sm text-gray-800 whitespace-pre-wrap max-h-48 overflow-y-auto pr-1 leading-relaxed">
-                                                            {questionTranscript}
-                                                        </div>
-                                                    </div>
-
-                                                    {/* 3. AI Feedback Box (Chỉ hiện nếu có feedback) */}
-                                                    {aiFeedback && (
-                                                        <div className="mt-3 p-3 bg-indigo-50 border-l-4 border-indigo-500 rounded-r-md">
-                                                            <h5 className="text-xs font-bold text-indigo-800 uppercase tracking-wider mb-1">AI Feedback</h5>
-                                                            <p className="text-sm text-indigo-900 italic">
-                                                                "{aiFeedback}"
-                                                            </p>
-                                                        </div>
-                                                    )}
+                                            /* TRƯỜNG HỢP 2: ĐANG XỬ LÝ (Processing) */
+                                            questionTranscript === "Processing..." || currentQuestionData?.status === 'retrying_processing_ai' ? (
+                                                <div className="flex flex-col gap-2 py-4 text-center">
+                                                    <span className="text-orange-600 font-medium animate-pulse text-lg">
+                                                        ⏳ AI is analyzing content...
+                                                    </span>
+                                                    <span className="text-xs text-gray-500">
+                                                        Please wait a moment...
+                                                    </span>
                                                 </div>
                                             ) : (
-                                                /* TRƯỜNG HỢP 3: KHÔNG CÓ DỮ LIỆU */
-                                                <div className="text-gray-400 italic py-4 text-center">
-                                                    Analysis data not available.
-                                                </div>
+                                                /* TRƯỜNG HỢP 3: THÀNH CÔNG (HIỆN KẾT QUẢ) */
+                                                questionTranscript ? (
+                                                    <div className="space-y-4">
+                                                        {/* Progress Bar */}
+                                                        <div>
+                                                            <div className="flex justify-between text-xs font-semibold text-gray-500 mb-1">
+                                                                <span>Relevance</span>
+                                                                <span>{aiMatchScore}/100</span>
+                                                            </div>
+                                                            <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                                                <div 
+                                                                    className={`h-2.5 rounded-full transition-all ${
+                                                                        aiMatchScore >= 70 ? 'bg-green-500' : aiMatchScore >= 40 ? 'bg-yellow-400' : 'bg-red-500'
+                                                                    }`} 
+                                                                    style={{ width: `${aiMatchScore}%` }}
+                                                                ></div>
+                                                            </div>
+                                                        </div>
+                                                        <hr className="border-gray-100" />
+                                                        {/* Transcript Text */}
+                                                        <div>
+                                                            <h5 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Transcript</h5>
+                                                            <div className="text-sm text-gray-800 whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed">
+                                                                {questionTranscript}
+                                                            </div>
+                                                        </div>
+                                                        {/* Feedback */}
+                                                        {aiFeedback && (
+                                                            <div className="mt-3 p-3 bg-indigo-50 border-l-4 border-indigo-500 rounded-r-md">
+                                                                <h5 className="text-xs font-bold text-indigo-800 uppercase tracking-wider mb-1">AI Feedback</h5>
+                                                                <p className="text-sm text-indigo-900 italic">"{aiFeedback}"</p>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    /* TRƯỜNG HỢP 4: KHÔNG CÓ DỮ LIỆU */
+                                                    <div className="text-gray-400 italic py-4 text-center">
+                                                        Analysis data not available.
+                                                    </div>
+                                                )
                                             )
                                         )}
                                     </>
                                 )}
                             </div>
                         </div>
-                        <div className="p-4 bg-gray-50 rounded-lg shadow-inner border border-gray-200">
-                            <h4 className="text-lg font-bold text-indigo-700 mb-2">Emotion & Pace Scores</h4>
-                            <p className="text-sm text-gray-600">
-                                **Placeholder:** Advanced analysis of confidence, voice tone, and pace will be displayed here using structured JSON data from the server.
+                        {/* --- DÁN ĐOẠN NÀY VÀO --- */}
+<div className="p-4 bg-gray-50 rounded-lg shadow-inner border border-gray-200">
+    <h4 className="text-lg font-bold text-indigo-700 mb-3 flex items-center gap-2">
+        Emotion & Pace Analysis
+        {(questionTranscript === "Processing..." || questionTranscript === "Waiting in queue...") && (
+             <span className="animate-pulse text-xs font-normal text-orange-600 bg-orange-100 px-2 py-0.5 rounded-full">
+                Analyzing...
+             </span>
+        )}
+    </h4>
+
+    {/* TRƯỜNG HỢP 1: LỖI (HIỆN "Analysis Failed") */}
+    {(currentQuestionData?.status === 'ai_error' || (questionTranscript && questionTranscript.includes("AI Analysis Failed"))) ? (
+        <div className="bg-red-50 border border-red-200 rounded p-4 text-center">
+            <h5 className="text-red-700 font-bold mb-2 flex items-center justify-center gap-2">
+                ⚠️ Analysis Failed
+            </h5>
+            <p className="text-red-600 text-sm">
+                Emotion and pace analysis could not be completed.
+            </p>
+        </div>
+    ) : (
+        /* TRƯỜNG HỢP 2: ĐANG XỬ LÝ HOẶC THÀNH CÔNG */
+        (questionTranscript === "Processing..." || questionTranscript === "Waiting in queue..." ? (
+            <div className="flex flex-col gap-2 py-4 text-center">
+                <span className="text-orange-600 font-medium animate-pulse text-lg">
+                    ⏳ AI is analyzing content...
+                </span>
+                <span className="text-xs text-gray-500">
+                    Please wait a moment...
+                </span>
+            </div>
+        ) : (
+            <div className="grid grid-cols-2 gap-3">
+                {/* EMOTION CARD */}
+                <div className="bg-white p-3 rounded border border-gray-200 text-center shadow-sm">
+                    <p className="text-xs text-gray-500 uppercase font-bold tracking-wider mb-1">Emotion</p>
+                    {serverEmotion ? (
+                        <>
+                            <p className="text-lg font-extrabold text-indigo-600 capitalize">
+                                {serverEmotion}
                             </p>
-                            <ul className="text-xs mt-2 space-y-1">
-                                <li>Confidence: <span className="font-bold text-green-600">85% (Simulated)</span></li>
-                                <li>Pace: <span className="font-bold text-yellow-600">145 WPM (Simulated)</span></li>
-                            </ul>
-                        </div>
+                            {serverEmotionScore !== null && (
+                                <p className="text-xs text-gray-400 mt-1">
+                                    Intensity: {Math.round(serverEmotionScore)}%
+                                </p>
+                            )}
+                        </>
+                    ) : (
+                        <p className="text-sm text-gray-400 italic py-2">--</p>
+                    )}
+                </div>
+
+                {/* PACE CARD */}
+                <div className="bg-white p-3 rounded border border-gray-200 text-center shadow-sm">
+                    <p className="text-xs text-gray-500 uppercase font-bold tracking-wider mb-1">Pace</p>
+                    {serverPaceWpm !== null ? (
+                        <>
+                            <p className="text-lg font-extrabold text-indigo-600">
+                                {Math.round(serverPaceWpm)} <span className="text-xs font-normal text-gray-500">WPM</span>
+                            </p>
+                            <p className={`text-xs mt-1 font-semibold ${
+                                serverPaceLabel === 'Fast' ? 'text-yellow-600' : 
+                                serverPaceLabel === 'Slow' ? 'text-blue-600' : 'text-green-600'
+                            }`}>
+                                {serverPaceLabel || 'Normal'}
+                            </p>
+                        </>
+                    ) : (
+                        <p className="text-sm text-gray-400 italic py-2">--</p>
+                    )}
+                </div>
+            </div>
+        ))
+    )}
+</div>
                     </div>
                 </div>
 
@@ -1689,10 +1945,28 @@ const App = () => {
                             />
                         </div>
                         
-                        <button type="submit" className="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition">
-                            Submit Review for Q{currentQIndex + 1}
+                        {/* Tìm đoạn button cũ và thay bằng đoạn này */}
+                        <button 
+                            type="submit" 
+                            disabled={isLoading} // Disable khi đang load
+                            className={`px-6 py-2 text-white font-semibold rounded-lg shadow-md transition
+                                ${isLoading ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+                        >
+                            {/* Dùng toán tử 3 ngôi để hiển thị chữ */}
+                            {isLoading ? 'Saving...' : `Submit Review for Q${currentQIndex + 1}`}
+
                         </button>
                     </form>
+                    {message && (
+                        <div className={`mt-4 p-3 rounded-lg text-sm font-medium border ${
+                            message.includes('Success') || message.includes('✅') 
+                                ? 'bg-green-50 text-green-700 border-green-200' 
+                                : 'bg-red-50 text-red-700 border-red-200'
+                        }`}>
+                            {message}
+                        </div>
+                    )}
+
                 </div>
             </div>
         );
@@ -1851,6 +2125,25 @@ const App = () => {
 
         return (
             <div className="p-8 bg-white shadow-2xl rounded-xl w-full max-w-6xl">
+                {/* --- ACCESS DENIED WARNING (Text Only) --- */}
+                {mediaAccessStatus === 'denied' && (
+                    <div className="mb-6 bg-red-50 border-l-4 border-red-500 p-4 rounded shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                        <div className="text-red-700">
+                            <p className="font-bold text-lg">Camera & Microphone Access Denied</p>
+                            <p className="text-sm mt-1">
+                                Access is required to proceed. Please enable permissions in your browser address bar settings.
+                            </p>
+                        </div>
+                        <button 
+                            onClick={requestMediaAccess}
+                            className="whitespace-nowrap bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-6 rounded transition shadow-sm"
+                        >
+                            Retry Access
+                        </button>
+                    </div>
+                )}
+                {/* --- END WARNING --- */}
+
                 <h2 className="text-3xl font-extrabold text-gray-800 mb-2 text-center">Interview Session</h2>
                 <p className="text-gray-500 mb-8 text-center">
                     Welcome, {userName}. Answer the questions below. (Q{questionNumber} of {MAX_QUESTIONS})

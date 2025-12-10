@@ -18,7 +18,8 @@ from server.api.models import (
 
 import uuid # For generating unique IDs
 
-from server.ai_service import safe_process_interview_answer
+from server.ai_service_v2 import safe_process_interview_answer
+from server.job_queue import analysis_queue, JobStatus
 # --- CONFIGURATION ---
 # Mandatory timezone setup for folder naming (Asia/Bangkok)
 ASIA_BANGKOK = pytz.timezone('Asia/Bangkok')
@@ -54,6 +55,25 @@ class RetryRequest(BaseModel):
     folder: str = Field(..., description="The video storage folder name.")
     questionIndex: int = Field(..., description="The 0-based index of the question to retry.")
     questionText: Optional[str] = Field(None, description="The question text, reused in the AI prompt.")
+
+class ReviewSubmission(BaseModel):
+    """
+    Schema for the Human Review submission by Interviewer.
+    """
+    token: str = Field(..., description="Session token.")
+    question_index: int = Field(..., description="The 0-based index of the question being reviewed.")
+    clarity: int = Field(..., ge=1, le=10, description="Clarity & Structure score (1-10).")
+    confidence: int = Field(..., ge=1, le=10, description="Confidence & Fluency score (1-10).")
+    comment: str = Field(..., description="Detailed feedback/comments from interviewer.")
+
+# 👇 THÊM CLASS NÀY VÀO 👇
+class ReviewSubmission(BaseModel):
+    token: str = Field(..., description="Session token.")
+    question_index: int = Field(..., description="Must match Frontend variable name exactly.")
+    clarity: int = Field(..., description="Score 1-10.")
+    confidence: int = Field(..., description="Score 1-10.")
+    comment: str = Field(..., description="Text feedback.")
+# -------------------------
 
 # --- 1. POST /api/verify-token (MANDATORY SERVER VALIDATION) ---
 
@@ -202,7 +222,8 @@ async def upload_one(
     token: str = Form(...),
     folder: str = Form(...),
     questionIndex: int = Form(...),
-    questionText: str = Form(None), 
+    questionText: str = Form(None),
+    durationSeconds: int = Form(None),     # <-- NEW: duration in seconds from frontend 
     video: UploadFile = File(...)
 ):
     """
@@ -312,7 +333,8 @@ async def upload_one(
             'transcript_text': "Processing...", # Frontend sẽ hiện chữ này trong khi chờ
             'transcriptFile': None,
             'sizeMB': round(file_size_bytes / (1024 * 1024), 2),
-            'uploadedAt': datetime.now(pytz.utc).isoformat()
+            'uploadedAt': datetime.now(pytz.utc).isoformat(),
+            'durationSeconds': int(durationSeconds) if durationSeconds is not None else 0
         }
         
         # Recalculate total size
@@ -344,17 +366,31 @@ async def upload_one(
     except Exception as e:
         print(f"Metadata update error: {e}")
 
-    # 7. TRIGGER BACKGROUND TASK (Phần quan trọng nhất)
-    # Server trả về OK ngay lập tức, AI chạy ngầm bên dưới
-    background_tasks.add_task(
-        safe_process_interview_answer,   # Hàm import từ ai_service.py
-        video_path=full_file_path,
-        question_index=questionIndex,
-        output_folder=full_folder_path,
-        question_text=question_text, # Biến ta đã xử lý ở bước 5
-        token=token,
-        db=db
-    )
+    # 7. ADD JOB TO QUEUE (Queue sẽ xử lý tự động)
+    # Server trả về OK ngay lập tức, queue xử lý ngầm bên dưới
+    try:
+        job_id = analysis_queue.add_job(
+            token=token,
+            folder=full_folder_path,
+            question_index=questionIndex,
+            question_text=question_text,
+            video_path=full_file_path,
+            is_manual_retry=False
+        )
+        print(f"[upload-one] Added job to queue: {job_id}")
+    except Exception as e:
+        print(f"[upload-one] Error adding job to queue: {e}")
+        # Fallback: Direct processing (legacy path)
+        background_tasks.add_task(
+            safe_process_interview_answer,
+            video_path=full_file_path,
+            question_index=questionIndex,
+            output_folder=full_folder_path,
+            question_text=question_text,
+            token=token,
+            db=db,
+            duration_seconds=int(durationSeconds) if durationSeconds is not None else None
+        )
 
     # 8. Success Response
     return {
@@ -364,71 +400,57 @@ async def upload_one(
     }
 
 # --- 4. POST /api/retry-processing (MANUAL RETRY BUTTON) ---
+# Use the main `api_router` instance defined above
 @api_router.post("/retry-processing", status_code=status.HTTP_200_OK)
 async def retry_processing(
-    req: RetryRequest, # Sử dụng Pydantic Model đã import
-    background_tasks: BackgroundTasks):
+    req: RetryRequest, 
+    background_tasks: BackgroundTasks
+):
     """
-    Endpoint dành cho nút 'Retry' ở Frontend.
-    Không upload file lại, chỉ chạy lại logic AI trên file đã tồn tại.
+    Endpoint kích hoạt lại AI Analysis cho một video cụ thể.
+    Sử dụng file video đã lưu trên Firebase từ lần upload trước.
     """
-    db = get_firestore_client()
-    
-    # 1. Tái tạo đường dẫn file
+    # 1. Tái tạo đường dẫn file (Logic này phải khớp với cách bạn lưu file)
+    # Sử dụng UPLOAD_DIR global (đã được define ở top của file)
     full_folder_path = os.path.join(UPLOAD_DIR, req.folder)
+    
+    # Lưu ý: Client gửi index 0, file lưu là Q1.webm -> cộng thêm 1
     file_name = f"Q{req.questionIndex + 1}.webm"
     full_file_path = os.path.join(full_folder_path, file_name)
 
-    # 2. Kiểm tra file có tồn tại không
+    # 2. Kiểm tra file video có tồn tại không
     if not os.path.exists(full_file_path):
         raise HTTPException(status_code=404, detail="Original video file not found. Please re-upload.")
 
-    # 3. Cập nhật lại trạng thái Metadata thành 'processing' để UI hiện spinner
-    metadata_path = os.path.join(full_folder_path, 'meta.json')
+    print(f"🔄 Manual Retry triggered for {req.folder} - Q{req.questionIndex + 1}")
+
+    # 3. Add retry job to queue
+    q_text = req.questionText if req.questionText else "Unknown Question (Retry)"
+
     try:
-        if os.path.exists(metadata_path):
-            # Cần xử lý lỗi Unicode Decode như bạn đã làm ở các hàm khác
-            try:
-                with open(metadata_path, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
-            except Exception:
-                # Dùng logic fallback đơn giản hơn nếu không thể đọc
-                print("[Retry] Warning: Metadata read failed. Using empty dict.")
-                metadata = {"receivedQuestions": {}, "videoSizeTotalMB": 0}
-            
-            # Update status
-            str_idx = str(req.questionIndex)
-            if str_idx in metadata['receivedQuestions']:
-                # TRẠNG THÁI MỚI CHO VIỆC RETRY
-                metadata['receivedQuestions'][str_idx]['status'] = 'retrying_processing_ai' 
-                metadata['receivedQuestions'][str_idx]['transcript_text'] = "Retrying AI analysis..."
-                # Xóa kết quả cũ nếu có (để Frontend biết là AI chưa xong)
-                metadata['receivedQuestions'][str_idx]['ai_done'] = False
-                metadata['receivedQuestions'][str_idx]['ai_match_score'] = 0
-                metadata['receivedQuestions'][str_idx]['ai_feedback'] = "Processing..."
-            
-            # Ghi file với utf-8
-            with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=4, ensure_ascii=False)
+        job_id = analysis_queue.add_job(
+            token=req.token,
+            folder=full_folder_path,
+            question_index=req.questionIndex,
+            question_text=q_text,
+            video_path=full_file_path,
+            is_manual_retry=True
+        )
+        print(f"[retry-processing] Manual retry queued: {job_id}")
+        
+        # Get job to check status
+        job = analysis_queue.get_job(job_id)
+        queue_position = len(analysis_queue.queue)
+        
+        return {
+            "ok": True, 
+            "message": f"Manual retry queued for Q{req.questionIndex + 1}.",
+            "job_id": job_id,
+            "queue_position": queue_position
+        }
     except Exception as e:
-        print(f"[Retry] Warning: Could not update metadata: {e}")
-
-    # 4. Trigger Background Task (Gọi lại hàm AI đã có logic auto-retry)
-    q_text = req.questionText
-    if not q_text:
-        q_text = "Unknown Question (Retry)" # Fallback text
-
-    background_tasks.add_task(
-        safe_process_interview_answer, # <--- GỌI HÀM WRAPPER ĐÃ CÓ RETRY VÀ XỬ LÝ LỖI CUỐI CÙNG
-        video_path=full_file_path,
-        question_index=req.questionIndex,
-        output_folder=full_folder_path,
-        question_text=q_text,
-        token=req.token,
-        db=db
-    )
-
-    return {"ok": True, "message": "Manual retry initiated."}
+        print(f"[retry-processing] Error queuing retry: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to queue retry: {str(e)}")
 
 # --- 5. POST /api/session/finish ---
 
@@ -515,6 +537,86 @@ async def create_new_session(request: InterviewerCreateSessionRequest):
     except Exception as e:
         print(f"Error creating session: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create new interview session.")
+
+# --- 6. GET /api/job-status (QUEUE STATUS POLLING) ---
+@api_router.get("/job-status/{job_id}")
+async def get_job_status(job_id: str):
+    """
+    Get status of a specific job in the queue.
+    Used by frontend to poll for job completion/updates.
+    """
+    job = analysis_queue.get_job(job_id)
+    
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    
+    return {
+        "job_id": job_id,
+        "status": job.status.value,
+        "created_at": job.created_at.isoformat(),
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "queue_position": len(analysis_queue.queue),  # How many jobs ahead
+        "question_index": job.question_index,
+        "is_manual_retry": job.is_manual_retry,
+        # For failed jobs with auto-retry scheduled
+        "retry_scheduled_at": job.retry_info.auto_retry_scheduled_at.isoformat() 
+            if job.retry_info.auto_retry_scheduled_at else None,
+        "retry_attempt": job.retry_info.auto_retry_attempt,
+        # Result (only if completed)
+        "result": job.result if job.status.value == "success" else None,
+        "error_message": job.error_message if job.status.value == "failed" else None
+    }
+
+@api_router.get("/queue-status")
+async def get_queue_status():
+    """Get overall queue status for monitoring"""
+    return analysis_queue.get_queue_status()
+
+# --- 7. POST /api/interviewer/submit-review (XỬ LÝ LƯU REVIEW) ---
+
+@api_router.post("/interviewer/submit-review", response_model=OkResponse, status_code=status.HTTP_200_OK)
+async def submit_review(review_data: ReviewSubmission):
+    """
+    Nhận điểm và nhận xét từ Interviewer, lưu vào Firestore.
+    """
+    db = get_firestore_client()
+    if not db:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database connection error.")
+
+    try:
+        print(f"[submit-review] Saving review for Token: {review_data.token}, Q{review_data.question_index}")
+
+        # 1. Tìm Session Document (Ưu tiên tìm theo ID)
+        session_ref = db.collection("sessions").document(review_data.token)
+        doc = session_ref.get()
+
+        # Nếu không tìm thấy theo ID, tìm theo field 'token'
+        if not doc.exists:
+            found = list(db.collection("sessions").where("token", "==", review_data.token).stream())
+            if not found:
+                raise HTTPException(status_code=404, detail="Session not found")
+            session_ref = found[0].reference
+
+        # 2. Chuẩn bị dữ liệu để lưu
+        # Dùng set(..., merge=True) để không ghi đè mất dữ liệu cũ
+        session_ref.set({
+            "reviews": {
+                # Chuyển số 0 thành string "0" để làm key trong Firestore Map
+                str(review_data.question_index): {
+                    "clarity": review_data.clarity,
+                    "confidence": review_data.confidence,
+                    "comment": review_data.comment,
+                    "submitted_at": datetime.now(ASIA_BANGKOK).isoformat()
+                }
+            }
+        }, merge=True)
+
+        return OkResponse(ok=True)
+
+    except Exception as e:
+        print(f"Error saving review: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # --- Test Endpoint (Existing) ---
 @api_router.get("/status")

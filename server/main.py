@@ -4,6 +4,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
 import sys
+from dotenv import load_dotenv
+
+# Load environment variables from .env file in the server directory
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(env_path)
 
 # When running `python main.py` from the `server/` directory, Python's import
 # machinery doesn't include the repository root on `sys.path`, so package-style
@@ -21,6 +26,7 @@ sys.stderr.reconfigure(encoding='utf-8')
 
 from server.api.router import api_router # Import the API router we just created
 from server.api.firebase_setup import initialize_firebase # <-- Import the Firebase initialization function
+from server.queue_worker import queue_worker  # Import queue worker
 
 # --- FASTAPI APPLICATION INITIALIZATION ---
 
@@ -55,11 +61,21 @@ app.add_middleware(
 async def startup_event():
     """
     Initializes Firebase and the database client when the server starts.
-    This runs once before the server accepts any requests.
+    Also starts the background queue worker.
     """
     print("Application Startup: Initializing Firebase...")
     initialize_firebase()
-# -----------------------------------------------------------------
+    
+    print("Application Startup: Starting queue worker...")
+    queue_worker.start()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """
+    Stops the queue worker when the server shuts down.
+    """
+    print("Application Shutdown: Stopping queue worker...")
+    queue_worker.stop()
 
 # --- API ROUTER INCLUSION ---
 
