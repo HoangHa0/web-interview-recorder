@@ -80,4 +80,85 @@ These statuses ensure per-question behavior: stop recording -> upload immediatel
 
 ## 🛠️ Getting Started (Run Instructions)
 
-> _To be completed in Week 3 after backend/frontend implementation._
+To run the system locally, you need **Python 3.8+**, **Node.js 16+**, and valid API credentials for Gemini and Firebase.
+
+### 1. Prerequisites
+
+- **Gemini API Key**: Required for AI analysis (Flash 2.5 model).
+- **Firebase Service Account**: JSON file for Firestore authentication.
+- **HTTPS/Localhost**: The browser requires a secure context to access the camera/microphone[cite: 79].
+
+### 2. Backend Setup (Server)
+
+The backend handles token validation, video storage, and the async Job Queue for AI processing.
+
+```bash
+# Navigate to backend directory
+cd backend
+
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# On Windows:
+venv\Scripts\activate
+# On macOS/Linux:
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Create .env file
+# Add your Google API Key and path to firebase credentials
+echo "GEMINI_API_KEY=your_key_here" > .env
+echo "FIREBASE_CRED_PATH=./serviceAccountKey.json" >> .env
+
+# Run the server (Default port: 8000)
+uvicorn main:app --reload
+```
+
+# 3. Frontend Setup (Client)
+The frontend is built with **React** and **Vite**, utilizing `MediaRecorder` for capturing video.
+
+```bash
+# Navigate to frontend directory
+cd frontend
+
+# Install packages
+npm install
+
+# Create .env.local file
+# Point to your local FastAPI backend
+echo "VITE_API_URL=http://localhost:8000" > .env.local
+
+# Run the development server
+npm run dev
+```
+
+
+# 4. Operational Usage & Limits
+Once both servers are running:
+
+- **Admin:** Generate a session token via the backend console or admin endpoint.
+
+- **Candidate:** Open the frontend URL (e.g., `http://localhost:5173`)
+  - Enter the Token and Name to validate against Firestore.
+  - Grant Camera/Microphone permissions (Mandatory). 
+
+- **Recording Flow:**
+  - The system randomly selects 5 questions (SI, IN, DF, PS categories) 
+  - When user stops recording: the video is uploaded via `multipart/form-data` 
+  - The "Next" button is enabled ONLY after receiving HTTP 200 from server 
+
+# ⚠️ Known Constraints 
+
+- **Rate Limiting:** The AI Job Queue processes only 1 request every 15 seconds (4 req/min) to stay within Gemini Flash 2.5 free tier limits. 
+
+- **Error Recovery:**
+  - **Uploads:** If an upload fails (network error), the client waits: 2s -> 4s -> 8s  (Exponential Backoff) before showing a manual retry button. 
+
+  - **AI Analysis:** If the API returns 429 (rate limit), the worker waits 70s before retrying. 
+
+
+
+
