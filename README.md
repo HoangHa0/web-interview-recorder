@@ -159,7 +159,7 @@ The server strictly validates media types:
 
 ---
 
-## 🔐 HTTPS Requirements
+## ⚠️ HTTPS Requirements
 
 The browser **requires a secure context (HTTPS)** to access camera and microphone hardware via the MediaRecorder API.
 
@@ -295,45 +295,31 @@ The Job Queue system ensures reliable AI analysis with the following mechanism:
 
 ### AI Retry Scenarios
 
-The Job Queue manages three failure scenarios with the following retry flows:
+The Job Queue manages two failure scenarios with the following retry flows:
 
-**Scenario 1: Rate Limit (HTTP 429 - Gemini API Quota)**
+**Scenario 1: Automatic Retry (Rate Limit, Network Error, Server Error)**
+
+Triggered by: HTTP 429 (Gemini quota), 5xx errors (500, 503), or timeout
 
 ```
-Upload succeeds → Queue processes → Gemini returns 429
+Queue processing → Failure detected
           ↓
    [Queue marks RETRY_SCHEDULED]
           ↓
-   Wait 70 seconds (API quota reset)
-          ↓
-   Auto-retry: 1 single attempt
-          ↓
-   Success? ← meta.json updated ✓
-          ↓
-   Failed? ← UI shows "Analysis Failed" button
-                 ↓
-              User clicks "Retry AI Analysis"
-                 ↓
-           New job queued (respects 15s throttling)
-```
-
-**Scenario 2: Network/Server Error (500, 503, timeout)**
-
-```
-Queue processing → Connection timeout or 5xx error
-          ↓
-   [Queue marks RETRY_SCHEDULED]
-          ↓
-   Wait 70 seconds
+   Wait 70 seconds (quota reset / recovery period)
           ↓
    Auto-retry: 1 single attempt
           ↓
    Success? ← meta.json + Firestore updated ✓
           ↓
-   Failed? ← Available for manual retry
+   Failed? ← UI shows "Analysis Failed" button
+                 ↓
+              User clicks "Retry AI Analysis"
+                 ↓
+           Manual retry job queued (respects 15s throttling)
 ```
 
-**Scenario 3: Manual Retry (User Triggered)**
+**Scenario 2: Manual Retry (User Triggered)**
 
 ```
 User sees "Analysis Failed" message
