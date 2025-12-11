@@ -310,7 +310,7 @@ Queue processing → Failure detected
           ↓
    Auto-retry: 1 single attempt
           ↓
-   Success? ← meta.json + Firestore updated ✓
+   Success? ← meta.json + Q_transcript.txt + Firestore ✓
           ↓
    Failed? ← UI shows "Analysis Failed" button
                  ↓
@@ -340,16 +340,6 @@ Frontend POST /api/retry-processing
           ↓
    Failed ← Shows error, retry button available again
 ```
-### Frontend Integration
-
-The review interface provides real-time AI feedback:
-
-- **Loading State**: Shows "⏳ AI is analyzing content..." with spinner
-- **Success State**: Displays transcript box, emotion card, pace card with metrics
-- **Error State**: Shows "⚠️ Analysis Failed" with "Retry AI Analysis" button
-- **Auto-Polling**: Refreshes status every 3 seconds while `status = "Processing..."`
-
-The AI analysis results populate `meta.json` automatically and are accessible at `/uploads/{folderName}/` for download via the static file server.
 
 **Error Handling (Implemented):**
 
@@ -494,6 +484,17 @@ Output: {
    - **Words Per Minute**: 70-180 typical range
    - **Labels**: slow (<90 WPM), normal (90-150), fast (>150)
    - Indicates confidence, articulation clarity, and natural speech flow
+
+### Frontend Integration
+
+The review interface provides real-time AI feedback:
+
+- **Loading State**: Shows "⏳ AI is analyzing content..." with spinner
+- **Success State**: Displays transcript box, emotion card, pace card with metrics
+- **Error State**: Shows "⚠️ Analysis Failed" with "Retry AI Analysis" button
+- **Auto-Polling**: Refreshes status every 3 seconds while `status = "Processing..."`
+
+The AI analysis results populate `meta.json` automatically and are accessible at `/uploads/{folderName}/` for download via the static file server.
 
 ---
 
