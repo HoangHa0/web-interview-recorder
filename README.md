@@ -27,7 +27,7 @@ The system is designed with two distinct user interfaces:
 ### System Flow Overview
 
 **Admin Preparation Phase:**
-1. **Admin logs in** with API key (`VITE_ADMIN_AUTH_KEY`)
+1. **Admin logs in** with Secret Key (`VITE_ADMIN_AUTH_KEY`)
 2. **Admin creates session token** via `/api/interviewer/create-session` endpoint
    - Generates a unique UUID token
    - Associates token with interviewee name
@@ -72,7 +72,7 @@ The system is designed with two distinct user interfaces:
 
 ```
 ADMIN SETUP PHASE:
-  1. Admin Login (API Key)
+  1. Admin Login (Secret Key)
          ↓
   2. Create Token (POST /api/interviewer/create-session)
      └─ Generates UUID → Save to Firestore (status: pending)
