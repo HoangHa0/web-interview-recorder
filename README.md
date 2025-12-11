@@ -53,7 +53,7 @@ The system is designed with two distinct user interfaces:
    - Frontend polls `/api/job-status/{job_id}` every 3 seconds
    - Display results when ready: transcript + match score + emotion + pace
 5. **Finish session** → `/api/session/finish` finalizes `meta.json`
-   - Marks session as `complete` in Firestore
+   - Marks session as `submitted` in Firestore
    - All Q1-Q5 videos uploaded (AI jobs may still be processing)
 
 **Admin Review Phase:**
@@ -151,12 +151,29 @@ The server strictly validates media types:
 ## 🔒 Security & Best Practices
 
 - **Token Validation**: Every API request requires a valid session token
-- **HTTPS Mandatory**: Camera/microphone access requires secure context
 - **Firebase Security Rules**: Restrict Firestore access to authenticated users
 - **Rate Limiting**: Job Queue implements 15s throttling to prevent quota abuse
 - **File Validation**: MIME type checking on upload (video/webm, video/ogg only)
 - **Error Handling**: Graceful degradation with user-friendly error messages
 - **Camera/Microphone Permission Denial**: If user denies permission, UI displays "Camera & Microphone Access Denied" message and blocks interview flow
+
+---
+
+## 🔐 HTTPS Requirements
+
+The browser **requires a secure context (HTTPS)** to access camera and microphone hardware via the MediaRecorder API.
+
+**Why HTTPS?**
+- Browser security policy: Camera/microphone access only allowed over HTTPS (or localhost for development)
+- `navigator.mediaDevices.getUserMedia()` will throw a `NotAllowedError` if called over HTTP
+
+**Development Setup:**
+- **Local development**: Use `http://localhost:5173` (browser exception for localhost)
+- **Public deployment**: Must deploy frontend on HTTPS (use Vercel, Netlify, etc.)
+
+**Backend:**
+- Backend API can run on HTTP in development (`http://localhost:8000`)
+- Production: Recommended to use HTTPS for all endpoints
 
 ---
 
@@ -432,21 +449,14 @@ cd client
 # Install dependencies
 npm install
 
-# Create .env file with required configuration
-cat > .env << EOF
-VITE_API_URL=http://localhost:8000
-VITE_ADMIN_AUTH_KEY=your_admin_key_here
-EOF
+# Create .env file (optional, if backend is not on localhost:8000)
+echo "VITE_API_URL=http://localhost:8000" > .env.local
 
 # Run the development server
 npm run dev
 ```
 
 The frontend will be available at `http://localhost:5173`.
-
-**Environment Variables:**
-- `VITE_API_URL` — Backend API server URL (default: `http://localhost:8000`)
-- `VITE_ADMIN_AUTH_KEY` — Secret key for admin/interviewer login (required for Admin Dashboard)
 
 **Key Features:**
 - Live camera preview with MediaRecorder API
