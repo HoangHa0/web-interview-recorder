@@ -18,7 +18,7 @@ The system is designed with two distinct user interfaces:
 | Frontend (Client)      | React + Tailwind CSS | Dynamic state management and modern, responsive UI design.                      |
 | Backend (Server)       | Python (FastAPI)     | High performance, great for API development, unified stack for AI/ML features.  |
 | Database               | Firestore (Firebase) | Persistent storage for user accounts, tokens, and the question bank.            |
-| Deployment             | Vercel/Netlify (Client), Heroku/Fly.io (Server) | Free public hosting, HTTPS for camera/mic access (mandatory). |
+| Deployment             | Vercel (Client), Render (Server) | Free public hosting, HTTPS for camera/mic access (mandatory). |
 
 ---
 
